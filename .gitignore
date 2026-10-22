@@ -1,0 +1,16 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# build.sh output, release zips
+build/
+*.zip
+
+# disk images (test fixtures live in .build/fixtures)
+*.dmg
+*.sparseimage
+
+.DS_Store

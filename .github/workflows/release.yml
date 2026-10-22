@@ -1,0 +1,74 @@
+name: Release
+
+# Push a tag that matches Resources/Info.plist's CFBundleShortVersionString, e.g.
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build.sh numbers the build by commit count
+
+      - name: Tag matches Info.plist version
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Info.plist version $VERSION"
+            exit 1
+          fi
+
+      - name: Test
+        run: swift test
+
+      - name: Build Ejectable.app (release, universal)
+        run: ./build.sh
+
+      - name: Zip and checksum
+        run: |
+          ZIP="Ejectable-$GITHUB_REF_NAME.zip"
+          ditto -c -k --keepParent build/Ejectable.app "$ZIP"
+          shasum -a 256 "$ZIP" > "$ZIP.sha256"
+          cat "$ZIP.sha256"
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # The lines between "## [VERSION]" and the next "## [" heading (or the link definitions at the end).
+          awk -v head="## [$VERSION]" '
+            index($0, "## [") == 1 || /^\[[^]]+\]: / { if (found) exit; if (index($0, head) == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          {
+            echo
+            echo "### Install"
+            echo
+            echo "Ejectable is ad-hoc signed, not notarized. After downloading, check the zip against its .sha256, unzip it,"
+            echo "move Ejectable.app to /Applications or ~/Applications and clear the quarantine flag once:"
+            echo
+            echo '```sh'
+            echo "shasum -a 256 -c Ejectable-$GITHUB_REF_NAME.zip.sha256"
+            echo "xattr -dr com.apple.quarantine ~/Applications/Ejectable.app"
+            echo '```'
+          } >> notes.md
+          cat notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "Ejectable-$GITHUB_REF_NAME.zip" "Ejectable-$GITHUB_REF_NAME.zip.sha256" \
+            --title "Ejectable $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
